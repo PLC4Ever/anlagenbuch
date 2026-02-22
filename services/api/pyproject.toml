@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "anlagenbuch-api"
+version = "0.1.0"
+description = "Anlagenbuch/Tickets/Reporting API"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.115.6",
+  "uvicorn[standard]==0.32.1",
+  "sqlalchemy==2.0.36",
+  "alembic==1.14.0",
+  "psycopg[binary]==3.2.3",
+  "pydantic==2.10.3",
+  "pydantic-settings==2.7.0",
+  "python-multipart==0.0.19",
+  "itsdangerous==2.2.0",
+  "httpx==0.28.1",
+  "pytest==8.3.4",
+  "pytest-asyncio==0.24.0"
+]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["../../tests/api"]

@@ -1,0 +1,18 @@
+[Unit]
+Description=Anlagen Caddy Proxy
+After=anlagen-app.service anlagen-mailpit.service
+Requires=anlagen-app.service anlagen-mailpit.service
+
+[Container]
+Image=docker.io/library/caddy:2-alpine
+ContainerName=anlagen-caddy
+Volume=/srv/anlagenserver/config/Caddyfile:/etc/caddy/Caddyfile:Z
+PublishPort=8080:8080
+Network=anlagen-net
+HealthCmd=wget -qO- http://127.0.0.1:8080/readyz || exit 1
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Schichtbuch</title>
+    <style>
+      body { font-family: "IBM Plex Sans", sans-serif; margin: 0; background: linear-gradient(135deg,#f4f7f2,#e5f0ea); color:#13211a; }
+      .container { max-width: 980px; margin: 0 auto; padding: 24px; }
+      .card { background: #fff; border-radius: 14px; padding: 16px; margin-bottom: 14px; box-shadow: 0 10px 24px rgba(0,0,0,0.07); }
+      h1 { margin: 0; }
+      h2 { margin-top: 0; }
+      .subtitle { margin: 6px 0 12px; color: #375449; font-weight: 600; }
+      .muted { color: #476357; }
+      input, textarea, button { font: inherit; }
+      input, textarea { width: 100%; padding: 10px; border: 1px solid #c6d7cc; border-radius: 8px; margin-bottom: 8px; }
+      button { padding: 10px 14px; border: none; border-radius: 8px; background: #0f6a4a; color: #fff; margin-right: 8px; cursor: pointer; }
+      button.secondary { background: #b9c8bf; color: #1f2b24; }
+      button.danger { background: #9b1c31; color: #fff; }
+      .menu-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+      .menu-tabs .tab { background: #d5e3da; color: #1f2b24; }
+      .menu-tabs .tab.active { background: #0f6a4a; color: #fff; }
+      .offline { background: #8f1b1b; color: #fff; padding: 8px 10px; border-radius: 8px; margin-bottom: 12px; }
+      .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+      .upload-box { margin-top: 12px; border: 1px solid #d7e5dc; border-radius: 10px; background: #f9fcfa; padding: 10px; }
+      .pending-list { margin-top: 10px; border: 1px dashed #bed3c6; border-radius: 8px; background: #fcfefd; padding: 8px; }
+      .pending-item { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin-top: 8px; }
+      .pending-item > div { flex: 1; min-width: 0; }
+      .pending-preview { margin-top: 6px; max-width: 220px; width: 100%; border-radius: 8px; border: 1px solid #c6d7cc; display: block; }
+      .upload-preview { margin-top: 10px; border: 1px solid #d7e5dc; border-radius: 10px; background: #ffffff; padding: 10px; }
+      .preview-image, .annotate-canvas { width: 100%; max-width: 100%; border: 1px solid #c6d7cc; border-radius: 8px; background: #fff; display: block; }
+      .annotate-canvas { touch-action: none; cursor: crosshair; }
+      .history-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+      .history-list { display: grid; gap: 8px; }
+      .history-item { border: 1px solid #d7e5dc; border-radius: 10px; background: #f8fcf9; padding: 10px; }
+      .history-item-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-bottom: 6px; }
+      .history-status { font-size: 0.85rem; border: 1px solid #bfd3c7; border-radius: 999px; padding: 2px 8px; background: #eef6f1; }
+      .history-body { margin: 0 0 8px; color: #1f2b24; }
+      .notice-error { margin-top: 10px; padding: 10px; border: 1px solid #f3a2a2; background: #fff0f0; border-radius: 8px; }
+      .detail-body { border: 1px solid #d7e5dc; border-radius: 8px; background: #f8fcf9; padding: 10px; white-space: pre-wrap; }
+      .edit-box { border: 1px solid #d7e5dc; border-radius: 8px; background: #f8fcf9; padding: 10px; margin-bottom: 10px; }
+      .attachment-list { display: grid; gap: 8px; }
+      .attachment-item { border: 1px solid #d7e5dc; border-radius: 8px; background: #fff; padding: 10px; }
+      .attachment-item p { margin-top: 0; }
+      .attachment-thumb { max-width: 260px; width: 100%; border: 1px solid #c6d7cc; border-radius: 8px; cursor: zoom-in; display: block; }
+      .link-btn { display: inline-block; text-decoration: none; padding: 10px 14px; border-radius: 8px; background: #0f6a4a; color: #fff; }
+      .link-btn.secondary { background: #b9c8bf; color: #1f2b24; }
+      .modal-backdrop { position: fixed; inset: 0; background: rgba(16, 24, 40, 0.56); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 1000; }
+      .modal-card { width: min(820px, 100%); max-height: 88vh; overflow: auto; background: #fff; border-radius: 14px; padding: 14px; box-shadow: 0 22px 45px rgba(0,0,0,0.28); }
+      .modal-head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+      .image-modal-card { width: min(980px, 100%); max-height: 92vh; overflow: auto; background: #fff; border-radius: 14px; padding: 14px; box-shadow: 0 22px 45px rgba(0,0,0,0.28); }
+      .image-modal { width: 100%; max-height: 72vh; object-fit: contain; border: 1px solid #c6d7cc; border-radius: 8px; background: #fff; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,56 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    container_name: anlagen-postgres
+    env_file:
+      - ./env/postgres.env
+    volumes:
+      - /srv/anlagenserver/pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - anlagen-net
+
+  app:
+    build:
+      context: ../..
+      dockerfile: services/api/Dockerfile
+    image: localhost/anlagen-app:latest
+    container_name: anlagen-app
+    env_file:
+      - ./env/app.env
+    depends_on:
+      - postgres
+    volumes:
+      - /srv/anlagenserver/files:/srv/anlagenserver/files
+      - /srv/anlagenserver/reports:/srv/anlagenserver/reports
+      - /srv/anlagenserver/logs:/srv/anlagenserver/logs
+      - /srv/anlagenserver/backups:/srv/anlagenserver/backups
+      - /srv/anlagenserver/config:/srv/anlagenserver/config
+    restart: unless-stopped
+    networks:
+      - anlagen-net
+
+  mailpit:
+    image: docker.io/axllent/mailpit:latest
+    container_name: anlagen-mailpit
+    restart: unless-stopped
+    networks:
+      - anlagen-net
+
+  caddy:
+    image: docker.io/library/caddy:2-alpine
+    container_name: anlagen-caddy
+    depends_on:
+      - app
+      - mailpit
+    volumes:
+      - ../../ops/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    networks:
+      - anlagen-net
+
+networks:
+  anlagen-net:
+    name: anlagen-net

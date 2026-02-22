@@ -1,0 +1,6 @@
+[Unit]
+Description=Anlagenserver log and trace rotation
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash __INSTALL_ROOT__/ops/scripts/rotate_logs.sh

@@ -1,0 +1,39 @@
+﻿:8080 {
+  encode gzip
+
+  handle_path /api/* {
+    reverse_proxy anlagen-app:8000
+  }
+
+  handle /healthz {
+    reverse_proxy anlagen-app:8000
+  }
+
+  handle /readyz {
+    reverse_proxy anlagen-app:8000
+  }
+
+  handle_path /ops/mail* {
+    reverse_proxy anlagen-mailpit:8025
+  }
+
+  handle /ops* {
+    reverse_proxy anlagen-app:8000
+  }
+
+  handle /Schichtbuch/* {
+    reverse_proxy anlagen-app:8000
+  }
+
+  handle /Tickets/* {
+    reverse_proxy anlagen-app:8000
+  }
+
+  handle /admin* {
+    reverse_proxy anlagen-app:8000
+  }
+
+  handle {
+    reverse_proxy anlagen-app:8000
+  }
+}

@@ -1,0 +1,24 @@
+[Unit]
+Description=Anlagenbuch FastAPI API
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_GROUP__
+WorkingDirectory=__INSTALL_ROOT__/services/api
+EnvironmentFile=/etc/anlagenbuch/app.env
+Environment=PYTHONPATH=__INSTALL_ROOT__/services/api
+ExecStart=__INSTALL_ROOT__/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/srv/anlagenserver __INSTALL_ROOT__/services/api/static
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

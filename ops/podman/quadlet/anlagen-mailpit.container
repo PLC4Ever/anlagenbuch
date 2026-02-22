@@ -1,0 +1,16 @@
+[Unit]
+Description=Anlagen Mailpit
+After=network-online.target
+
+[Container]
+Image=docker.io/axllent/mailpit:latest
+ContainerName=anlagen-mailpit
+PublishPort=127.0.0.1:8025:8025
+PublishPort=127.0.0.1:1025:1025
+Network=anlagen-net
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

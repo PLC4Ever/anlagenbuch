@@ -1,0 +1,25 @@
+[Unit]
+Description=Anlagen API App
+After=anlagen-postgres.service
+Requires=anlagen-postgres.service
+
+[Container]
+Image=localhost/anlagen-app:latest
+ContainerName=anlagen-app
+EnvironmentFile=/srv/anlagenserver/config/app.env
+Volume=/srv/anlagenserver/files:/srv/anlagenserver/files:Z
+Volume=/srv/anlagenserver/reports:/srv/anlagenserver/reports:Z
+Volume=/srv/anlagenserver/logs:/srv/anlagenserver/logs:Z
+Volume=/srv/anlagenserver/backups:/srv/anlagenserver/backups:Z
+Volume=/srv/anlagenserver/config:/srv/anlagenserver/config:Z
+Network=anlagen-net
+HealthCmd=curl -fsS http://127.0.0.1:8000/readyz || exit 1
+HealthInterval=15s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

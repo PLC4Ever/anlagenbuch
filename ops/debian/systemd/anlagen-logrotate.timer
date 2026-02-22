@@ -1,0 +1,9 @@
+[Unit]
+Description=Run Anlagenserver log rotation daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

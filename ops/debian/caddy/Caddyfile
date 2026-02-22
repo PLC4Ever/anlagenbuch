@@ -1,0 +1,35 @@
+:8080 {
+  encode gzip
+
+  handle_path /api/* {
+    reverse_proxy 127.0.0.1:8000
+  }
+
+  handle /healthz {
+    reverse_proxy 127.0.0.1:8000
+  }
+
+  handle /readyz {
+    reverse_proxy 127.0.0.1:8000
+  }
+
+  handle /ops* {
+    reverse_proxy 127.0.0.1:8000
+  }
+
+  handle /Schichtbuch/* {
+    reverse_proxy 127.0.0.1:8000
+  }
+
+  handle /Tickets/* {
+    reverse_proxy 127.0.0.1:8000
+  }
+
+  handle /admin* {
+    reverse_proxy 127.0.0.1:8000
+  }
+
+  handle {
+    reverse_proxy 127.0.0.1:8000
+  }
+}
