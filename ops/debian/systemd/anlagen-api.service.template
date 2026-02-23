@@ -13,11 +13,11 @@ Environment=PYTHONPATH=__INSTALL_ROOT__/services/api
 ExecStart=__INSTALL_ROOT__/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=always
 RestartSec=3
-NoNewPrivileges=true
+NoNewPrivileges=false
 PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/srv/anlagenserver __INSTALL_ROOT__/services/api/static
+ReadWritePaths=/srv/anlagenserver __INSTALL_ROOT__/services/api/static /etc/caddy
 UMask=0027
 
 [Install]

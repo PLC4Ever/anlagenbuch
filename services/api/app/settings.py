@@ -41,6 +41,22 @@ class Settings(BaseSettings):
 
     outbox_max_attempts: int = 3
     watchdog_interval_seconds: int = 60
+    cert_monitor_host: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CERT__HOST", "APP__CERT__HOST"),
+    )
+    cert_monitor_port: int = Field(
+        default=443,
+        validation_alias=AliasChoices("CERT__PORT", "APP__CERT__PORT"),
+    )
+    cert_renew_command: str = Field(
+        default="/usr/local/sbin/anlagen-renew-cert",
+        validation_alias=AliasChoices("CERT__RENEW_COMMAND", "APP__CERT__RENEW_COMMAND"),
+    )
+    cert_domain_command: str = Field(
+        default="/usr/local/sbin/anlagen-domain-cert",
+        validation_alias=AliasChoices("CERT__DOMAIN_COMMAND", "APP__CERT__DOMAIN_COMMAND"),
+    )
 
     @property
     def files_dir(self) -> Path:

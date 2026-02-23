@@ -51,6 +51,12 @@ type DashboardDetail = {
   timeline: Array<{ event_type: string; payload: Record<string, unknown>; created_at: string }>;
 };
 
+function releasePreview(preview: string | null): void {
+  if (preview && preview.startsWith("blob:")) {
+    URL.revokeObjectURL(preview);
+  }
+}
+
 const CLOSED_STATUSES = new Set(["CLOSED", "CANCELLED", "CANCELLED_WRONG_PLANT"]);
 const OPEN_STATUSES = new Set(["NEW", "QUEUED", "IN_PROGRESS", "RESOLVED", "TRIAGE"]);
 const STATUS_STEPS = ["NEW", "QUEUED", "IN_PROGRESS", "RESOLVED", "CLOSED"];
@@ -125,6 +131,7 @@ export function App() {
   const [brushSize, setBrushSize] = useState(8);
   const [brushColor, setBrushColor] = useState("#e11d48");
   const annotateCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const screenshotInputRef = useRef<HTMLInputElement | null>(null);
   const drawingRef = useRef(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
 
@@ -155,8 +162,47 @@ export function App() {
     setUploadMessage(`Anhang vorgemerkt: ${file.name}. Wird nach Ticket-Erstellung hochgeladen.`);
   }
 
+  function setScreenshotPreviewSafe(next: string | null) {
+    setScreenshotPreview((prev) => {
+      releasePreview(prev);
+      return next;
+    });
+  }
+
+  function openScreenshotPicker() {
+    const input = screenshotInputRef.current;
+    if (!input) return;
+    input.value = "";
+    input.click();
+  }
+
+  function stageScreenshotDraft(file: File, preview: string, message: string) {
+    setScreenshotFile(file);
+    setScreenshotPreviewSafe(preview);
+    setShowAnnotateChoice(true);
+    setAnnotating(false);
+    setUploadMessage(message);
+  }
+
+  function handlePickedScreenshot(file: File | null, token: string) {
+    if (!file) return;
+    if (!file.type.toLowerCase().startsWith("image/")) {
+      setUploadMessage("Bitte eine Bilddatei fuer den Screenshot auswaehlen.");
+      return;
+    }
+    const preview = URL.createObjectURL(file);
+    const msg = token.trim()
+      ? "Screenshot uebernommen. Markierungen hinzufuegen?"
+      : "Screenshot vorgemerkt. Markierungen hinzufuegen?";
+    stageScreenshotDraft(file, preview, msg);
+  }
+
   function removePendingAttachment(id: string) {
-    setPendingAttachments((prev) => prev.filter((x) => x.id !== id));
+    setPendingAttachments((prev) => {
+      const target = prev.find((x) => x.id === id);
+      if (target) releasePreview(target.preview);
+      return prev.filter((x) => x.id !== id);
+    });
   }
 
   async function sendAttachment(token: string, file: File): Promise<{ ok: boolean; status: number; detail: string }> {
@@ -218,7 +264,10 @@ export function App() {
 
   async function captureScreenshot(token: string) {
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      setUploadMessage("Screenshot wird vom Browser nicht unterstuetzt.");
+      const reason = window.isSecureContext
+        ? "Direkte Bildschirmaufnahme wird von diesem Browser nicht angeboten."
+        : "Direkte Bildschirmaufnahme ist nur in einem sicheren Kontext (HTTPS) verfuegbar.";
+      setUploadMessage(`${reason} Nutze stattdessen 'Screenshot-Datei waehlen' oder Strg+V.`);
       return;
     }
 
@@ -243,11 +292,8 @@ export function App() {
 
       const blob = await canvasToBlob(canvas);
       const file = new File([blob], `ticket-screenshot-${Date.now()}.png`, { type: "image/png" });
-      setScreenshotFile(file);
-      setScreenshotPreview(canvas.toDataURL("image/png"));
-      setShowAnnotateChoice(true);
-      setAnnotating(false);
-      setUploadMessage(token.trim() ? "Screenshot erstellt. Markierungen hinzufuegen?" : "Screenshot vorgemerkt. Markierungen hinzufuegen?");
+      const msg = token.trim() ? "Screenshot erstellt. Markierungen hinzufuegen?" : "Screenshot vorgemerkt. Markierungen hinzufuegen?";
+      stageScreenshotDraft(file, canvas.toDataURL("image/png"), msg);
     } catch (e) {
       setUploadMessage(`Screenshot fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -259,7 +305,7 @@ export function App() {
 
   function clearScreenshotDraft() {
     setScreenshotFile(null);
-    setScreenshotPreview(null);
+    setScreenshotPreviewSafe(null);
     setShowAnnotateChoice(false);
     setAnnotating(false);
   }
@@ -366,6 +412,27 @@ export function App() {
     };
     img.src = screenshotPreview;
   }, [annotating, screenshotPreview]);
+
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      const items = event.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (!item.type.toLowerCase().startsWith("image/")) continue;
+        const file = item.getAsFile();
+        if (!file) continue;
+        const preview = URL.createObjectURL(file);
+        const msg = publicToken.trim()
+          ? "Screenshot aus Zwischenablage uebernommen. Markierungen hinzufuegen?"
+          : "Screenshot aus Zwischenablage vorgemerkt. Markierungen hinzufuegen?";
+        stageScreenshotDraft(file, preview, msg);
+        event.preventDefault();
+        return;
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [publicToken]);
 
   async function submit() {
     if (!name.trim() || !subject.trim() || !description.trim()) {
@@ -520,6 +587,14 @@ export function App() {
     window.location.href = `/Tickets/${encodeURIComponent(dashboardPlantSlug)}`;
   }
 
+  function goBackFromStatus(plantSlug: string) {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+    window.location.href = `/Tickets/${encodeURIComponent(plantSlug)}`;
+  }
+
   function UploadActions({ token }: { token: string }) {
     return (
       <div style={{ marginTop: 12 }}>
@@ -539,8 +614,19 @@ export function App() {
             e.currentTarget.value = "";
           }}
         />
+        <input
+          ref={screenshotInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            handlePickedScreenshot(e.target.files?.[0] || null, token);
+            e.currentTarget.value = "";
+          }}
+        />
         <div className="toolbar">
           <button className="secondary" onClick={() => void captureScreenshot(token)} disabled={uploadBusy}>Screenshot aufnehmen</button>
+          <button className="secondary" onClick={openScreenshotPicker} disabled={uploadBusy}>Screenshot-Datei waehlen</button>
         </div>
         {pendingAttachments.length > 0 ? (
           <div className="pending-list">
@@ -606,6 +692,9 @@ export function App() {
   }
 
   if (mode === "status") {
+    const statusPlantSlug = typeof statusData?.plant_slug === "string" && statusData.plant_slug.trim()
+      ? statusData.plant_slug.trim()
+      : createPlantSlug;
     return (
       <div className="container">
         <div className="card">
@@ -616,7 +705,10 @@ export function App() {
             <>
               <p>Status: {statusData.status}</p>
               <p>Betreff: {statusData.subject}</p>
-              {statusData.plant_slug ? <a className="cta" href={`/Tickets/dashboard/${encodeURIComponent(statusData.plant_slug)}`}>Zur Ticketliste der Anlage</a> : null}
+              <div className="toolbar">
+                <a className="cta" href={`/Tickets/dashboard/${encodeURIComponent(statusPlantSlug)}`}>Verlauf der Anlage</a>
+                <button className="secondary" onClick={() => goBackFromStatus(statusPlantSlug)}>Zurueck</button>
+              </div>
               {statusData.wrong_plant_reason ? <p>Hinweis: falscher Anlagen-Link.</p> : null}
               {statusData.suggested_create_url ? <a className="cta" href={statusData.suggested_create_url}>Neues Ticket fuer richtige Anlage erstellen</a> : null}
             </>
@@ -736,6 +828,9 @@ export function App() {
     <div className="container">
       <div className="card">
         <h1>Ticket fuer Anlage: {createPlantSlug}</h1>
+        <div className="toolbar">
+          <a className="cta" href={`/Tickets/dashboard/${encodeURIComponent(createPlantSlug)}`}>Verlauf der Anlage</a>
+        </div>
         <input placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
         <input placeholder="Betreff" value={subject} onChange={(e) => setSubject(e.target.value)} />
         <textarea placeholder="Beschreibung" rows={6} value={description} onChange={(e) => setDescription(e.target.value)} />
@@ -748,7 +843,12 @@ export function App() {
           </div>
         ) : null}
         <UploadActions token={publicToken} />
-        {submitSuccess ? <a className="cta" href={submitSuccess.dashboardUrl}>Status aufrufen</a> : null}
+        {submitSuccess ? (
+          <div className="toolbar">
+            <a className="cta" href={submitSuccess.statusUrl}>Status aufrufen</a>
+            <a className="cta" href={submitSuccess.dashboardUrl}>Verlauf der Anlage</a>
+          </div>
+        ) : null}
       </div>
     </div>
   );

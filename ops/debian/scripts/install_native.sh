@@ -62,6 +62,24 @@ fi
 chown root:"$APP_GROUP" "$APP_ENV_FILE"
 chmod 0640 "$APP_ENV_FILE"
 
+echo "[install] cert renew helper"
+install -m 0750 -o root -g root \
+  "$INSTALL_ROOT/ops/debian/scripts/renew_caddy_cert.sh" \
+  /usr/local/sbin/anlagen-renew-cert
+cat > /etc/sudoers.d/anlagen-renew-cert <<EOF
+$APP_USER ALL=(root) NOPASSWD: /usr/local/sbin/anlagen-renew-cert
+EOF
+chmod 0440 /etc/sudoers.d/anlagen-renew-cert
+
+echo "[install] domain cert helper"
+install -m 0750 -o root -g root \
+  "$INSTALL_ROOT/ops/debian/scripts/domain_cert_admin.sh" \
+  /usr/local/sbin/anlagen-domain-cert
+cat > /etc/sudoers.d/anlagen-domain-cert <<EOF
+$APP_USER ALL=(root) NOPASSWD: /usr/local/sbin/anlagen-domain-cert
+EOF
+chmod 0440 /etc/sudoers.d/anlagen-domain-cert
+
 echo "[install] postgres bootstrap"
 systemctl enable --now postgresql
 if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1; then

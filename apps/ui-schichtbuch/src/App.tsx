@@ -128,6 +128,7 @@ export function App() {
   const [brushSize, setBrushSize] = useState(8);
   const [brushColor, setBrushColor] = useState("#e11d48");
   const annotateCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const screenshotInputRef = useRef<HTMLInputElement | null>(null);
   const drawingRef = useRef(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
   const pendingRef = useRef<PendingAttachment[]>([]);
@@ -349,9 +350,41 @@ export function App() {
     });
   }
 
+  function setScreenshotPreviewSafe(next: string | null) {
+    setScreenshotPreview((prev) => {
+      releasePreview(prev);
+      return next;
+    });
+  }
+
+  function openScreenshotPicker() {
+    const input = screenshotInputRef.current;
+    if (!input) return;
+    input.value = "";
+    input.click();
+  }
+
+  function stageScreenshotDraft(file: File, preview: string, message: string) {
+    setScreenshotFile(file);
+    setScreenshotPreviewSafe(preview);
+    setShowAnnotateChoice(true);
+    setAnnotating(false);
+    setUploadMessage(message);
+  }
+
+  function handlePickedScreenshot(file: File | null) {
+    if (!file) return;
+    if (!file.type.toLowerCase().startsWith("image/")) {
+      setUploadMessage("Bitte eine Bilddatei fuer den Screenshot auswaehlen.");
+      return;
+    }
+    const preview = URL.createObjectURL(file);
+    stageScreenshotDraft(file, preview, "Screenshot uebernommen. Willst du Markierungen setzen?");
+  }
+
   function clearScreenshotDraft() {
     setScreenshotFile(null);
-    setScreenshotPreview(null);
+    setScreenshotPreviewSafe(null);
     setShowAnnotateChoice(false);
     setAnnotating(false);
   }
@@ -394,7 +427,10 @@ export function App() {
 
   async function captureScreenshot() {
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      setUploadMessage("Screenshot wird von diesem Browser nicht unterstuetzt.");
+      const reason = window.isSecureContext
+        ? "Direkte Bildschirmaufnahme wird von diesem Browser nicht angeboten."
+        : "Direkte Bildschirmaufnahme ist nur in einem sicheren Kontext (HTTPS) verfuegbar.";
+      setUploadMessage(`${reason} Nutze stattdessen 'Screenshot-Datei waehlen' oder Strg+V.`);
       return;
     }
     let stream: MediaStream | null = null;
@@ -418,11 +454,7 @@ export function App() {
 
       const blob = await canvasToBlob(canvas);
       const file = new File([blob], `schichtbuch-screenshot-${Date.now()}.png`, { type: "image/png" });
-      setScreenshotFile(file);
-      setScreenshotPreview(canvas.toDataURL("image/png"));
-      setShowAnnotateChoice(true);
-      setAnnotating(false);
-      setUploadMessage("Screenshot erstellt. Willst du Markierungen setzen?");
+      stageScreenshotDraft(file, canvas.toDataURL("image/png"), "Screenshot erstellt. Willst du Markierungen setzen?");
     } catch (e) {
       setUploadMessage(`Screenshot fehlgeschlagen: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -526,6 +558,24 @@ export function App() {
     };
     img.src = screenshotPreview;
   }, [annotating, screenshotPreview]);
+
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      const items = event.clipboardData?.items;
+      if (!items) return;
+      for (const item of items) {
+        if (!item.type.toLowerCase().startsWith("image/")) continue;
+        const file = item.getAsFile();
+        if (!file) continue;
+        const preview = URL.createObjectURL(file);
+        stageScreenshotDraft(file, preview, "Screenshot aus Zwischenablage uebernommen. Willst du Markierungen setzen?");
+        event.preventDefault();
+        return;
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, []);
 
   async function flushQueue() {
     const queue = JSON.parse(localStorage.getItem(queueKey) || "[]") as Record<string, string>[];
@@ -693,8 +743,19 @@ export function App() {
                 e.currentTarget.value = "";
               }}
             />
+            <input
+              ref={screenshotInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                handlePickedScreenshot(e.target.files?.[0] || null);
+                e.currentTarget.value = "";
+              }}
+            />
             <div className="toolbar">
               <button className="secondary" onClick={() => void captureScreenshot()} disabled={uploadBusy}>Screenshot aufnehmen</button>
+              <button className="secondary" onClick={openScreenshotPicker} disabled={uploadBusy}>Screenshot-Datei waehlen</button>
             </div>
 
             {pendingAttachments.length > 0 ? (

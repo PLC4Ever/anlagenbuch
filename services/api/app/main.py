@@ -126,8 +126,15 @@ def _trace_snapshot(trace_id: str, request: Request, status_code: int, exc: Exce
 def _serve_index(root: Path) -> FileResponse:
     index = root / "index.html"
     if not index.exists():
-        return FileResponse(root / "missing.html") if (root / "missing.html").exists() else FileResponse(__file__)
-    return FileResponse(index)
+        fallback = root / "missing.html" if (root / "missing.html").exists() else Path(__file__)
+        response = FileResponse(fallback)
+    else:
+        response = FileResponse(index)
+    # Avoid stale SPA shell on clients after deployments.
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 def _serve_asset(root: Path, asset_path: str) -> FileResponse:

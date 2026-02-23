@@ -91,6 +91,26 @@ type OpsStatus = {
     configured?: boolean;
   };
 };
+type CertificateStatus = {
+  host: string;
+  port: number;
+  subject_cn: string | null;
+  issuer_cn: string | null;
+  serial_number: string | null;
+  not_before: string | null;
+  not_after: string | null;
+  seconds_remaining: number | null;
+  days_remaining: number | null;
+  valid_now: boolean;
+  checked_at: string;
+};
+type CertificateDomainCsr = {
+  host: string;
+  san_ip: string | null;
+  csr_path?: string | null;
+  key_path?: string | null;
+  csr_pem: string;
+};
 type EmailSettingsDraft = {
   enabled: boolean;
   host: string;
@@ -762,6 +782,12 @@ export function App() {
   const [opsErrors, setOpsErrors] = useState<Record<string, unknown>[]>([]);
   const [opsDel, setOpsDel] = useState<Record<string, unknown>[]>([]);
   const [dead, setDead] = useState<Record<string, unknown>[]>([]);
+  const [certStatus, setCertStatus] = useState<CertificateStatus | null>(null);
+  const [certBusy, setCertBusy] = useState(false);
+  const [certHostDraft, setCertHostDraft] = useState("");
+  const [certSanIpDraft, setCertSanIpDraft] = useState("");
+  const [certCsrPem, setCertCsrPem] = useState("");
+  const [certSignedPem, setCertSignedPem] = useState("");
   const [opf, setOpf] = useState({ trace_id: "", from_ts: "", to_ts: "" });
   const [logCfg, setLogCfg] = useState({ stream: "app", lines: 80 });
   const [logs, setLogs] = useState<Record<string, unknown> | null>(null);
@@ -1081,6 +1107,84 @@ export function App() {
   }
 
   async function loadDashboard() { setDashboard(await api<Record<string, unknown>>("/api/admin/dashboard")); }
+  async function loadCertificateStatus() {
+    const status = await api<CertificateStatus>("/api/admin/certificate/status");
+    setCertStatus(status);
+    setCertHostDraft((prev) => {
+      if (prev.trim()) return prev;
+      if (status.host && status.host.trim()) return status.host.trim();
+      if (typeof window !== "undefined") return (window.location.hostname || "").trim();
+      return "";
+    });
+    setCertSanIpDraft((prev) => {
+      if (prev.trim()) return prev;
+      const candidate = (status.host || "").trim();
+      if (/^\d{1,3}(\.\d{1,3}){3}$/.test(candidate)) return candidate;
+      return "";
+    });
+  }
+  async function renewCertificate() {
+    try {
+      setCertBusy(true);
+      const result = await api<{ certificate: CertificateStatus }>("/api/admin/certificate/renew", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      setCertStatus(result.certificate);
+      ok("TLS-Zertifikat wurde neu erzeugt und eingespielt.");
+    } catch (e) {
+      fail(e);
+    } finally {
+      setCertBusy(false);
+    }
+  }
+  async function createDomainCertificateCsr() {
+    try {
+      setCertBusy(true);
+      const host = certHostDraft.trim() || certStatus?.host || (typeof window !== "undefined" ? window.location.hostname : "");
+      if (!host) throw new Error("Bitte zuerst einen TLS-Host eintragen.");
+      const result = await api<CertificateDomainCsr>("/api/admin/certificate/domain/csr", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          host,
+          san_ip: certSanIpDraft.trim() || null,
+        }),
+      });
+      setCertHostDraft(result.host || host);
+      setCertCsrPem(result.csr_pem || "");
+      ok("CSR wurde erzeugt. Bitte bei der Domaenen-CA signieren und unten einspielen.");
+    } catch (e) {
+      fail(e);
+    } finally {
+      setCertBusy(false);
+    }
+  }
+  async function installDomainCertificate() {
+    try {
+      setCertBusy(true);
+      const host = certHostDraft.trim() || certStatus?.host || (typeof window !== "undefined" ? window.location.hostname : "");
+      if (!host) throw new Error("Bitte zuerst einen TLS-Host eintragen.");
+      const pem = certSignedPem.trim();
+      if (!pem.includes("-----BEGIN CERTIFICATE-----")) throw new Error("Bitte ein signiertes PEM-Zertifikat einfuegen.");
+      const result = await api<{ certificate: CertificateStatus }>("/api/admin/certificate/domain/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          host,
+          certificate_pem: pem,
+        }),
+      });
+      setCertStatus(result.certificate);
+      await loadDashboard();
+      ok("Signiertes Zertifikat wurde eingespielt und TLS wurde neu geladen.");
+    } catch (e) {
+      fail(e);
+    } finally {
+      setCertBusy(false);
+    }
+  }
   async function loadModules() { const m = await api<Mod>("/api/admin/module-settings"); setMods(m); setModsDraft(m); }
   async function saveModules() { if (!modsDraft) return; try { const m = await api<Mod>("/api/admin/module-settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(modsDraft) }); setMods(m); setModsDraft(m); ok("Module gespeichert."); } catch (e) { fail(e); } }
   function updateTicketOptions(key: "department_options" | "ticket_type_options", values: string[]) {
@@ -1571,7 +1675,7 @@ export function App() {
         await Promise.all([loadAgentTickets(), loadTicketGroups(), loadProfile()]);
         return;
       }
-      if (section === "dashboard") await Promise.all([loadDashboard(), loadOps(), loadModules(), loadPlantsAreas(), loadTicketGroups(), loadEmailSettings()]);
+      if (section === "dashboard") await Promise.all([loadDashboard(), loadOps(), loadModules(), loadPlantsAreas(), loadTicketGroups(), loadEmailSettings(), loadCertificateStatus()]);
       if (section === "modules") await loadModules();
       if (section === "plants") await loadPlantsAreas();
       if (section === "tickets") await Promise.all([loadTickets(), loadTicketGroups(), loadTicketAgents()]);
@@ -2783,6 +2887,88 @@ export function App() {
                   <span className="badge">SMTP Host: {opsStatus?.email_server?.host || "-"}</span>
                   <span className="badge">SMTP Port: {String(opsStatus?.email_server?.port ?? "-")}</span>
                 </div>
+                <div className="stats" style={{ marginTop: 8 }}>
+                  <div className="stat">
+                    <div className="k">TLS Host</div>
+                    <div className="v">{certStatus?.host || "-"}</div>
+                  </div>
+                  <div className="stat">
+                    <div className="k">Gueltig bis</div>
+                    <div className="v">{formatTs(certStatus?.not_after || null)}</div>
+                  </div>
+                  <div className="stat">
+                    <div className="k">Restlaufzeit</div>
+                    <div className="v">
+                      {certStatus?.days_remaining !== null && certStatus?.days_remaining !== undefined
+                        ? `${certStatus.days_remaining.toFixed(1)} Tage`
+                        : "-"}
+                    </div>
+                  </div>
+                  <div className="stat">
+                    <div className="k">Aussteller</div>
+                    <div className="v">{certStatus?.issuer_cn || "-"}</div>
+                  </div>
+                </div>
+                <div className="toolbar" style={{ marginTop: 8 }}>
+                  <span className="badge">TLS Status: {certStatus?.valid_now ? "Gueltig" : "Pruefen"}</span>
+                  <span className="badge">Geprueft: {formatTs(certStatus?.checked_at || null)}</span>
+                  {isAdmin ? (
+                    <button onClick={() => void renewCertificate()} disabled={certBusy}>
+                      {certBusy ? "Erneuere Zertifikat..." : "Zertifikat neu erzeugen"}
+                    </button>
+                  ) : null}
+                </div>
+                {isAdmin ? (
+                  <div className="stack" style={{ marginTop: 10 }}>
+                    <h3>Domaenen-CA (ohne Browser-Warnung in der Firma)</h3>
+                    <div className="cols-2">
+                      <div className="field">
+                        <label>TLS Hostname</label>
+                        <input
+                          placeholder="z.B. anlagendesk.firma.local"
+                          value={certHostDraft}
+                          onChange={(e) => setCertHostDraft(e.target.value)}
+                        />
+                      </div>
+                      <div className="field">
+                        <label>SAN IP (optional)</label>
+                        <input
+                          placeholder="z.B. 10.0.0.5"
+                          value={certSanIpDraft}
+                          onChange={(e) => setCertSanIpDraft(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="toolbar">
+                      <button className="secondary" onClick={() => void createDomainCertificateCsr()} disabled={certBusy}>
+                        CSR fuer Domaenen-CA erzeugen
+                      </button>
+                    </div>
+                    <div className="field">
+                      <label>CSR (bei Domaenen-CA einreichen)</label>
+                      <textarea
+                        rows={8}
+                        value={certCsrPem}
+                        readOnly
+                        placeholder="Hier erscheint die CSR nach Klick auf 'CSR fuer Domaenen-CA erzeugen'."
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Signiertes PEM-Zertifikat (inkl. Kette, falls vorhanden)</label>
+                      <textarea
+                        rows={8}
+                        value={certSignedPem}
+                        onChange={(e) => setCertSignedPem(e.target.value)}
+                        placeholder="-----BEGIN CERTIFICATE----- ..."
+                      />
+                    </div>
+                    <div className="toolbar">
+                      <button onClick={() => void installDomainCertificate()} disabled={certBusy}>
+                        Signiertes Zertifikat einspielen
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
                 <p className="muted" style={{ marginTop: 8 }}>
                   Letzter Fehler: {opsStatus?.health?.last_error || "-"}
                 </p>
@@ -2797,6 +2983,10 @@ export function App() {
                 <details style={{ marginTop: 8 }}>
                   <summary>Ops-Status-JSON anzeigen</summary>
                   <pre>{JSON.stringify(opsStatus, null, 2)}</pre>
+                </details>
+                <details style={{ marginTop: 8 }}>
+                  <summary>TLS-Zertifikat-JSON anzeigen</summary>
+                  <pre>{JSON.stringify(certStatus, null, 2)}</pre>
                 </details>
               </section>
             </div>

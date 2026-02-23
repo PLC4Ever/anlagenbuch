@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import ipaddress
+import re
+import subprocess
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -140,6 +144,20 @@ class TicketGroupMembersPatch(BaseModel):
     usernames: list[str] = Field(default_factory=list)
 
 
+class CertificateRenewIn(BaseModel):
+    host: str | None = Field(default=None, max_length=255)
+
+
+class CertificateDomainCsrIn(BaseModel):
+    host: str | None = Field(default=None, max_length=255)
+    san_ip: str | None = Field(default=None, max_length=64)
+
+
+class CertificateDomainInstallIn(BaseModel):
+    host: str | None = Field(default=None, max_length=255)
+    certificate_pem: str = Field(min_length=32, max_length=200_000)
+
+
 def _settings_file() -> Path:
     settings = get_settings()
     settings.config_dir.mkdir(parents=True, exist_ok=True)
@@ -167,6 +185,287 @@ def _save_module_settings(payload: dict) -> dict:
     path = _settings_file()
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
+
+
+_CERT_HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,253}[A-Za-z0-9]$")
+
+
+def _normalize_cert_host(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip().lower()
+    if not text:
+        return None
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    if ":" in text:
+        host, _, port = text.rpartition(":")
+        if host and port.isdigit():
+            text = host
+    if not _CERT_HOST_RE.match(text):
+        raise HTTPException(status_code=400, detail="invalid certificate host")
+    return text
+
+
+def _resolve_cert_target_host(request: Request, explicit_host: str | None = None) -> str:
+    settings = get_settings()
+    for candidate in (explicit_host, settings.cert_monitor_host, request.url.hostname):
+        normalized = _normalize_cert_host(candidate)
+        if normalized:
+            return normalized
+    raise HTTPException(status_code=400, detail="certificate host could not be resolved")
+
+
+def _parse_cert_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = parsedate_to_datetime(value)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _normalize_cert_san_ip(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        parsed = ipaddress.ip_address(text)
+        if parsed.version != 4:
+            raise HTTPException(status_code=400, detail="only IPv4 san_ip is supported")
+        return str(parsed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid certificate san_ip") from exc
+
+
+def _extract_pem_block(text: str, begin: str, end: str) -> str | None:
+    start_idx = text.find(begin)
+    if start_idx < 0:
+        return None
+    end_idx = text.find(end, start_idx)
+    if end_idx < 0:
+        return None
+    end_idx += len(end)
+    return text[start_idx:end_idx] + "\n"
+
+
+def _extract_pem_cert(chain_text: str) -> str | None:
+    begin = "-----BEGIN CERTIFICATE-----"
+    end = "-----END CERTIFICATE-----"
+    return _extract_pem_block(chain_text, begin, end)
+
+
+def _extract_pem_csr(text: str) -> str | None:
+    begin = "-----BEGIN CERTIFICATE REQUEST-----"
+    end = "-----END CERTIFICATE REQUEST-----"
+    return _extract_pem_block(text, begin, end)
+
+
+def _extract_key_value_lines(text: str) -> dict[str, str]:
+    data: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        if "=" not in raw_line:
+            continue
+        key, value = raw_line.split("=", 1)
+        data[key.strip()] = value.strip()
+    return data
+
+
+def _extract_cn(text: str) -> str | None:
+    match = re.search(r"CN\s*=\s*([^,/]+)", text)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _read_live_certificate(host: str) -> dict:
+    settings = get_settings()
+    port = int(settings.cert_monitor_port)
+    try:
+        handshake = subprocess.run(
+            [
+                "/usr/bin/openssl",
+                "s_client",
+                "-connect",
+                f"127.0.0.1:{port}",
+                "-servername",
+                host,
+                "-showcerts",
+            ],
+            input="",
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail=f"certificate handshake failed: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"certificate handshake timeout: {exc}") from exc
+
+    if handshake.returncode != 0:
+        detail = (handshake.stderr or handshake.stdout or "").strip()
+        raise HTTPException(
+            status_code=503,
+            detail=f"certificate handshake failed with exit code {handshake.returncode}{f': {detail[:280]}' if detail else ''}",
+        )
+
+    pem_cert = _extract_pem_cert(handshake.stdout or "")
+    if not pem_cert:
+        raise HTTPException(status_code=503, detail="certificate handshake returned no certificate")
+
+    cert_info = subprocess.run(
+        ["/usr/bin/openssl", "x509", "-noout", "-subject", "-issuer", "-serial", "-startdate", "-enddate"],
+        input=pem_cert,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    if cert_info.returncode != 0:
+        detail = (cert_info.stderr or cert_info.stdout or "").strip()
+        raise HTTPException(
+            status_code=503,
+            detail=f"certificate inspection failed with exit code {cert_info.returncode}{f': {detail[:280]}' if detail else ''}",
+        )
+
+    parsed_lines = _extract_key_value_lines(cert_info.stdout or "")
+
+    not_before = _parse_cert_timestamp(parsed_lines.get("notBefore"))
+    not_after = _parse_cert_timestamp(parsed_lines.get("notAfter"))
+    now = datetime.now(timezone.utc)
+    seconds_remaining = int((not_after - now).total_seconds()) if not_after else None
+    days_remaining = round((seconds_remaining / 86400), 2) if seconds_remaining is not None else None
+
+    try:
+        serial_value = parsed_lines.get("serial", "") or None
+    except Exception:
+        serial_value = None
+
+    return {
+        "host": host,
+        "port": port,
+        "subject_cn": _extract_cn(parsed_lines.get("subject", "")),
+        "issuer_cn": _extract_cn(parsed_lines.get("issuer", "")),
+        "serial_number": serial_value,
+        "not_before": not_before.isoformat() if not_before else None,
+        "not_after": not_after.isoformat() if not_after else None,
+        "seconds_remaining": seconds_remaining,
+        "days_remaining": days_remaining,
+        "valid_now": bool(
+            not_before
+            and not_after
+            and not_before <= now
+            and not_after > now
+        ),
+        "checked_at": now.isoformat(),
+    }
+
+
+def _run_certificate_renew(host: str) -> dict:
+    settings = get_settings()
+    command = ["/usr/bin/sudo", "-n", settings.cert_renew_command, "--host", host]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=90,
+            check=False,
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"certificate renew command failed: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"certificate renew timeout: {exc}") from exc
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise HTTPException(
+            status_code=500,
+            detail=f"certificate renew command returned {result.returncode}{f': {detail[:300]}' if detail else ''}",
+        )
+
+    return {
+        "command": command,
+        "stdout": (result.stdout or "").strip(),
+        "stderr": (result.stderr or "").strip(),
+    }
+
+
+def _run_certificate_domain_csr(host: str, san_ip: str | None) -> dict:
+    settings = get_settings()
+    command = ["/usr/bin/sudo", "-n", settings.cert_domain_command, "csr", "--host", host]
+    if san_ip:
+        command.extend(["--san-ip", san_ip])
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"certificate csr command failed: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"certificate csr timeout: {exc}") from exc
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise HTTPException(
+            status_code=500,
+            detail=f"certificate csr command returned {result.returncode}{f': {detail[:300]}' if detail else ''}",
+        )
+
+    stdout = result.stdout or ""
+    csr_pem = _extract_pem_csr(stdout)
+    if not csr_pem:
+        raise HTTPException(status_code=500, detail="certificate csr command returned no csr")
+
+    meta = _extract_key_value_lines(stdout)
+    return {
+        "host": meta.get("host") or host,
+        "san_ip": meta.get("san_ip") or san_ip,
+        "csr_path": meta.get("csr_path"),
+        "key_path": meta.get("key_path"),
+        "csr_pem": csr_pem,
+        "command": command,
+        "stdout": stdout.strip(),
+        "stderr": (result.stderr or "").strip(),
+    }
+
+
+def _run_certificate_domain_install(host: str, certificate_pem: str) -> dict:
+    settings = get_settings()
+    command = ["/usr/bin/sudo", "-n", settings.cert_domain_command, "install", "--host", host]
+    try:
+        result = subprocess.run(
+            command,
+            input=certificate_pem,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"certificate install command failed: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=504, detail=f"certificate install timeout: {exc}") from exc
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise HTTPException(
+            status_code=500,
+            detail=f"certificate install command returned {result.returncode}{f': {detail[:300]}' if detail else ''}",
+        )
+
+    return {
+        "command": command,
+        "stdout": (result.stdout or "").strip(),
+        "stderr": (result.stderr or "").strip(),
+    }
 
 
 def _user_roles(db: Session, user_id: int) -> list[str]:
@@ -324,6 +623,7 @@ def _serialize_ticket_group(db: Session, row: TicketGroup) -> dict:
 
 @router.get("/admin/dashboard")
 def dashboard(
+    request: Request,
     _: object = Depends(require_roles("Admin", "Dispatcher")),
     db: Session = Depends(get_db),
 ):
@@ -349,6 +649,14 @@ def dashboard(
     pending_deliveries = db.scalar(
         select(func.count()).select_from(Delivery).where(Delivery.status.in_(["PENDING", "FAILED_RETRY"]))
     ) or 0
+    cert_status: dict | None
+    cert_error: str | None = None
+    try:
+        cert_host = _resolve_cert_target_host(request)
+        cert_status = _read_live_certificate(cert_host)
+    except HTTPException as exc:
+        cert_status = None
+        cert_error = str(exc.detail)
 
     return {
         "app": {
@@ -365,6 +673,8 @@ def dashboard(
             "last_error": latest_health.last_error if latest_health else None,
         },
         "pending_deliveries": pending_deliveries,
+        "certificate": cert_status,
+        "certificate_error": cert_error,
         "module_status": {
             "anlagenbuch_enabled": True,
             "tickets_enabled": True,
@@ -396,6 +706,75 @@ def get_module_settings(
     _: object = Depends(require_roles("Admin", "Dispatcher")),
 ):
     return _load_module_settings()
+
+
+@router.get("/admin/certificate/status")
+def certificate_status(
+    request: Request,
+    _: object = Depends(require_roles("Admin", "Dispatcher")),
+):
+    host = _resolve_cert_target_host(request)
+    return _read_live_certificate(host)
+
+
+@router.post("/admin/certificate/renew")
+def renew_certificate(
+    payload: CertificateRenewIn,
+    request: Request,
+    _: object = Depends(require_roles("Admin")),
+):
+    host = _resolve_cert_target_host(request, payload.host)
+    cmd = _run_certificate_renew(host)
+    certificate = _read_live_certificate(host)
+    return {
+        "ok": True,
+        "host": host,
+        "certificate": certificate,
+        "command_stdout": cmd["stdout"],
+        "command_stderr": cmd["stderr"],
+    }
+
+
+@router.post("/admin/certificate/domain/csr")
+def create_domain_certificate_csr(
+    payload: CertificateDomainCsrIn,
+    request: Request,
+    _: object = Depends(require_roles("Admin")),
+):
+    host = _resolve_cert_target_host(request, payload.host)
+    san_ip = _normalize_cert_san_ip(payload.san_ip)
+    cmd = _run_certificate_domain_csr(host, san_ip)
+    return {
+        "ok": True,
+        "host": cmd["host"],
+        "san_ip": cmd["san_ip"],
+        "csr_path": cmd["csr_path"],
+        "key_path": cmd["key_path"],
+        "csr_pem": cmd["csr_pem"],
+        "command_stdout": cmd["stdout"],
+        "command_stderr": cmd["stderr"],
+    }
+
+
+@router.post("/admin/certificate/domain/install")
+def install_domain_certificate(
+    payload: CertificateDomainInstallIn,
+    request: Request,
+    _: object = Depends(require_roles("Admin")),
+):
+    host = _resolve_cert_target_host(request, payload.host)
+    pem = payload.certificate_pem.strip()
+    if "-----BEGIN CERTIFICATE-----" not in pem:
+        raise HTTPException(status_code=400, detail="certificate_pem must contain at least one certificate")
+    cmd = _run_certificate_domain_install(host, pem + "\n")
+    certificate = _read_live_certificate(host)
+    return {
+        "ok": True,
+        "host": host,
+        "certificate": certificate,
+        "command_stdout": cmd["stdout"],
+        "command_stderr": cmd["stderr"],
+    }
 
 
 @router.patch("/admin/module-settings")
